@@ -1,0 +1,50 @@
+debug = true
+
+[registry."docker.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x.xuanyuan.run",
+    "https://registry-1.docker.io"
+  ]
+
+[registry."quay.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-quay.xuanyuan.run"
+  ]
+
+[registry."nvcr.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-nvcr.xuanyuan.run"
+  ]
+
+[registry."registry.k8s.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-k8s.xuanyuan.run"
+  ]
+
+[registry."mcr.microsoft.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-mcr.xuanyuan.run"
+  ]
+
+[registry."docker.elastic.co"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-elastic.xuanyuan.run"
+  ]
+
+[registry."container-registry.oracle.com"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-oracle.xuanyuan.run"
+  ]
+
+[registry."gcr.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-gcr.xuanyuan.run"
+  ]
+
+[registry."ghcr.io"]
+  mirrors = [
+    "https://5w8hb5xz6wce1x-ghcr.xuanyuan.run"
+  ]
+
+[registry."172.16.2.106:5000"]
+  insecure = true

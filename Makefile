@@ -1,68 +1,84 @@
+# =========================
+# Config (可自定义)
+# =========================
+IMG_NAME ?= of-watchdog
+OWNER    ?= weew12
+SERVER   ?= 172.16.2.106:5000
+# TAG      ?= $(GIT_VERSION)
+TAG      ?= 0.11.4
 
-GIT_COMMIT=$(shell git rev-parse HEAD)
-GIT_VERSION=$(shell git describe --tags --always --dirty 2>/dev/null)
+BUILDER_NAME ?= multiarch
+NODE_NAME    ?= $(BUILDER_NAME)
+# PLATFORMS    ?= linux/amd64,linux/arm/v7,linux/arm64
+PLATFORMS    ?= linux/amd64,linux/arm64
+BUILDKIT_CONFIG ?= ./docker_buildx_config/buildkitd.toml
+
+# =========================
+# Git info
+# =========================
+GIT_COMMIT := $(shell git rev-parse HEAD)
+GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null)
 GIT_UNTRACKEDCHANGES := $(shell git status --porcelain --untracked-files=no)
 ifneq ($(GIT_UNTRACKEDCHANGES),)
 	GIT_VERSION := $(GIT_VERSION)-$(shell date +"%s")
 endif
-LDFLAGS := "-s -w -X main.Version=$(GIT_VERSION) -X main.GitCommit=$(GIT_COMMIT)"
 
-SERVER?=ghcr.io
-OWNER?=openfaas
-IMG_NAME?=of-watchdog
-TAG?=$(GIT_VERSION)
+# =========================
+# Colors
+# =========================
+RESET   := \033[0m
+BOLD    := \033[1m
+GREEN   := \033[32m
+BLUE    := \033[34m
+CYAN    := \033[36m
+MAGENTA := \033[35m
+YELLOW  := \033[33m
 
-export GOFLAGS=-mod=vendor
+export DOCKER_CLI_EXPERIMENTAL=enabled
+export DOCKER_BUILDKIT=1
 
-.PHONY: all
-all: gofmt test dist hashgen
+# =========================
+# Buildx preparation
+# =========================
+.PHONY: buildx-prepare
+buildx-prepare:
+	@printf "$(BLUE)$(BOLD)==> step 1/4: install qemu/binfmt$(RESET)\n"
+	@docker run --privileged --rm tonistiigi/binfmt --install all
+	@printf "$(BLUE)$(BOLD)==> step 2/4: remove old builder if exists$(RESET)\n"
+	@docker buildx rm $(BUILDER_NAME) 2>/dev/null || true
+	@printf "$(BLUE)$(BOLD)==> step 3/4: create buildx builder$(RESET) $(CYAN)$(BUILDER_NAME)$(RESET)\n"
+	@docker buildx create \
+		--name $(BUILDER_NAME) \
+		--node $(NODE_NAME) \
+		--driver docker-container \
+		--buildkitd-config $(BUILDKIT_CONFIG) \
+		--use
+	@printf "$(BLUE)$(BOLD)==> step 4/4: bootstrap builder$(RESET)\n"
+	@docker buildx inspect $(BUILDER_NAME) --bootstrap
+	@printf "$(GREEN)$(BOLD)==> builder ready$(RESET)\n"
 
-.PHONY: test
-test:
-	@echo "+ $@"
-	@go test -v ./...
-
-.PHONY: gofmt
-gofmt:
-	@echo "+ $@"
-	@gofmt -l -d $(shell find . -type f -name '*.go' -not -path "./vendor/*")
-
-
-.PHONY: build
-build:
-	@echo "+ $@"
-	@docker build \
-		--build-arg GIT_COMMIT=${GIT_COMMIT} \
-		--build-arg VERSION=${GIT_VERSION} \
-		-t $(SERVER)/$(OWNER)/$(IMG_NAME):$(TAG) .
-
-.PHONY: hashgen
-hashgen:
-	./ci/hashgen.sh
-
-.PHONY: dist
-dist:
-	@echo "+ $@"
-	CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags $(LDFLAGS) -o bin/fwatchdog-amd64
-	GOARM=7 GOARCH=arm CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags $(LDFLAGS) -o bin/fwatchdog-arm
-	GOARCH=arm64 CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags $(LDFLAGS) -o bin/fwatchdog-arm64
-	GOOS=windows CGO_ENABLED=0 go build -mod=vendor -ldflags $(LDFLAGS) -o bin/fwatchdog.exe
-
-# use this with
-# `./ci/copy_redist.sh $(make print-image) && ./ci/hashgen.sh`
-print-image:
-	@echo ${.IMAGE}
-
-# Example:
-# SERVER=docker.io OWNER=alexellis2 TAG=ready make publish
-.PHONY: publish
-publish: dist
-	@echo  $(SERVER)/$(OWNER)/$(IMG_NAME):$(TAG) && \
-	docker buildx create --use --name=multiarch --node=multiarch && \
-	docker buildx build \
-		--platform linux/amd64,linux/arm/v7,linux/arm64 \
-		--push=true \
-        --build-arg GIT_COMMIT=$(GIT_COMMIT) \
-        --build-arg VERSION=$(VERSION) \
+# =========================
+# Publish multi-arch image (可自定义 SERVER/OWNER/IMG_NAME/TAG)
+# =========================
+.PHONY: publish-buildx-all
+publish-buildx-all: buildx-prepare
+	@printf "$(MAGENTA)$(BOLD)==> publish image$(RESET)\n"
+	@printf "$(YELLOW)    image: $(CYAN)$(SERVER)/$(OWNER)/$(IMG_NAME):$(TAG)$(RESET)\n"
+	@printf "$(YELLOW)    platforms: $(CYAN)$(PLATFORMS)$(RESET)\n"
+	@printf "$(YELLOW)    git commit: $(CYAN)$(GIT_COMMIT)$(RESET)\n"
+	@printf "$(YELLOW)    version: $(CYAN)$(GIT_VERSION)$(RESET)\n"
+	@docker buildx build \
+		--builder $(BUILDER_NAME) \
+		--platform $(PLATFORMS) \
+		--push \
+		--build-arg VERSION=$(GIT_VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--tag $(SERVER)/$(OWNER)/$(IMG_NAME):$(TAG) \
 		.
+	@printf "$(GREEN)$(BOLD)==> publish done$(RESET)\n"
+
+# =========================
+# 使用示例
+# =========================
+# 可以这样自定义变量：
+# make publish-buildx-all SERVER=docker.io OWNER=alexellis TAG=ready

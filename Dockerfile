@@ -1,21 +1,26 @@
-FROM scratch AS cache
+# =========================
+# Build stage
+# =========================
+FROM golang:1.26 AS build
 
-COPY bin    .
-
-FROM scratch AS ship
-
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-ARG TARGETOS
 ARG TARGETARCH
+ARG TARGETOS
+ARG GOARM
+ARG VERSION
+ARG GIT_COMMIT
 
-COPY --from=cache /fwatchdog-$TARGETARCH ./fwatchdog
+WORKDIR /src
+COPY . .
 
-LABEL org.label-schema.license="MIT" \
-      org.label-schema.vcs-url="https://github.com/openfaas/of-watchdog" \
-      org.label-schema.vcs-type="Git" \
-      org.label-schema.name="openfaas/of-watchdog" \
-      org.label-schema.vendor="openfaas" \
-      org.label-schema.docker.schema-version="1.0"
+# 针对不同架构编译
+ENV GOARM=${GOARM:-}
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags "-s -w -X main.Version=$VERSION -X main.GitCommit=$GIT_COMMIT" \
+    -o /out/fwatchdog
 
+# =========================
+# Ship stage
+# =========================
+FROM scratch AS ship
+COPY --from=build /out/fwatchdog /fwatchdog
 ENTRYPOINT ["/fwatchdog"]
