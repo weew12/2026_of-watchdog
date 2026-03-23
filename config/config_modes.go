@@ -15,6 +15,7 @@ const (
 	// 适用场景：需要完整结果、不支持流式接收的调用方
 	ModeSerializing = 2
 
+	// Deprecated:
 	// ModeAfterBurn 高性能模式
 	// 针对性能优化的运行模式，减少额外开销提升执行速度
 	ModeAfterBurn = 3
