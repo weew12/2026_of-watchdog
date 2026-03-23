@@ -1,6 +1,8 @@
 // Copyright (c) OpenFaaS Author(s) 2021. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+// Package executor 提供函数执行器实现 ModeHTTP
+// 包含HTTP代理模式、进程内执行模式的函数运行与日志管理功能
 package executor
 
 import (
@@ -25,26 +27,43 @@ import (
 	fhttputil "github.com/openfaas/faas-provider/httputil"
 )
 
-// HTTPFunctionRunner creates and maintains one process responsible for handling all calls
+// HTTPFunctionRunner HTTP函数运行器
+// 创建并维护一个常驻进程，负责处理所有函数调用请求
 type HTTPFunctionRunner struct {
-	ExecTimeout    time.Duration // ExecTimeout the maximum duration or an upstream function call
-	ReadTimeout    time.Duration // ReadTimeout for HTTP server
-	WriteTimeout   time.Duration // WriteTimeout for HTTP Server
-	Process        string        // Process to run as fprocess
-	ProcessArgs    []string      // ProcessArgs to pass to command
-	Command        *exec.Cmd
-	StdinPipe      io.WriteCloser
-	StdoutPipe     io.ReadCloser
-	Client         *http.Client
-	UpstreamURL    *url.URL
+	// ExecTimeout 上游函数调用的最大执行超时时间
+	ExecTimeout time.Duration
+	// ReadTimeout HTTP服务器读取请求超时时间
+	ReadTimeout time.Duration
+	// WriteTimeout HTTP服务器写入响应超时时间
+	WriteTimeout time.Duration
+	// Process 要执行的函数进程路径
+	Process string
+	// ProcessArgs 传递给进程的参数列表
+	ProcessArgs []string
+	// Command 执行的系统命令实例 = Process + ProcessArgs
+	Command *exec.Cmd
+	// StdinPipe 进程标准输入管道
+	StdinPipe io.WriteCloser
+	// StdoutPipe 进程标准输出管道
+	StdoutPipe io.ReadCloser
+	// Client 发起上游HTTP请求的客户端
+	Client *http.Client
+	// UpstreamURL 上游服务地址
+	UpstreamURL *url.URL
+	// BufferHTTPBody 是否缓冲HTTP请求体
 	BufferHTTPBody bool
-	LogPrefix      bool
-	LogBufferSize  int
-	LogCallId      bool
-	ReverseProxy   *httputil.ReverseProxy
+	// LogPrefix 是否为日志添加前缀
+	LogPrefix bool
+	// LogBufferSize 日志缓冲区大小
+	LogBufferSize int
+	// LogCallId 是否记录请求调用ID
+	LogCallId bool
+	// ReverseProxy 标准库反向代理实例
+	ReverseProxy *httputil.ReverseProxy
 }
 
-// Start forks the process used for processing incoming requests
+// Start 启动用于处理请求的子进程
+// 创建进程管道、绑定日志、监听系统信号并启动进程
 func (f *HTTPFunctionRunner) Start() error {
 	cmd := exec.Command(f.Process, f.ProcessArgs...)
 
@@ -52,6 +71,8 @@ func (f *HTTPFunctionRunner) Start() error {
 	var stdoutErr error
 
 	f.Command = cmd
+	// 创建进程管道
+	// 用于将子进程的标准输入、输出、错误重定向到当前进程
 	f.StdinPipe, stdinErr = cmd.StdinPipe()
 	if stdinErr != nil {
 		return stdinErr
@@ -64,12 +85,13 @@ func (f *HTTPFunctionRunner) Start() error {
 
 	errPipe, _ := cmd.StderrPipe()
 
-	// Logs lines from stderr and stdout to the stderr and stdout of this process
+	// 将进程标准输出/错误重定向并打印到当前进程
 	bindLoggingPipe("stderr", errPipe, os.Stderr, f.LogPrefix, f.LogBufferSize)
 	bindLoggingPipe("stdout", f.StdoutPipe, os.Stdout, f.LogPrefix, f.LogBufferSize)
 
 	f.Client = makeProxyClient(f.ExecTimeout)
 
+	// 监听SIGTERM信号，优雅关闭子进程
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM)
@@ -79,6 +101,7 @@ func (f *HTTPFunctionRunner) Start() error {
 	}()
 
 	err := cmd.Start()
+	// 监听子进程退出状态，异常则直接退出
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
@@ -89,7 +112,8 @@ func (f *HTTPFunctionRunner) Start() error {
 	return err
 }
 
-// Run a function with a long-running process with a HTTP protocol for communication
+// Run 运行基于HTTP协议的常驻进程函数
+// 处理请求转发、超时控制、响应复制与请求日志记录
 func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *http.Request, w http.ResponseWriter) error {
 	startedTime := time.Now()
 
@@ -101,6 +125,7 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 
 	body := r.Body
 
+	// 开启缓冲则读取全部请求体，兼容不支持分块编码的服务
 	if f.BufferHTTPBody {
 		reqBody, _ := io.ReadAll(r.Body)
 		body = io.NopCloser(bytes.NewReader(reqBody))
@@ -111,6 +136,7 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 		return err
 	}
 
+	// 复制请求头
 	for h := range r.Header {
 		request.Header.Set(h, r.Header.Get(h))
 	}
@@ -118,6 +144,7 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 	request.Host = r.Host
 	copyHeaders(request.Header, &r.Header)
 
+	// 获取执行超时时间
 	execTimeout := getTimeout(r, f.ExecTimeout)
 
 	var reqCtx context.Context
@@ -127,11 +154,11 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 		reqCtx, cancel = context.WithTimeout(r.Context(), execTimeout)
 	} else {
 		reqCtx = r.Context()
-		cancel = func() {
-		}
+		cancel = func() {}
 	}
 	defer cancel()
 
+	// 流式/WebSocket请求使用标准库反向代理
 	if requiresStdlibProxy(r) {
 		ww := fhttputil.NewHttpWriteInterceptor(w)
 
@@ -140,12 +167,12 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 
 		log.Printf("%s %s - %d - Bytes: %s (%.4fs)", r.Method, r.RequestURI, ww.Status(), units.HumanSize(float64(ww.BytesWritten())), done.Seconds())
 	} else {
-
+		// 普通HTTP请求直接调用上游服务
 		res, err := f.Client.Do(request.WithContext(reqCtx))
 		if err != nil {
 			log.Printf("Upstream HTTP request error: %s\n", err.Error())
 
-			// Error unrelated to context / deadline
+			// 与上下文/超时无关的错误
 			if reqCtx.Err() == nil {
 				w.Header().Set("X-Duration-Seconds", fmt.Sprintf("%f", time.Since(startedTime).Seconds()))
 				w.Header().Add("X-OpenFaaS-Internal", "of-watchdog")
@@ -157,8 +184,8 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 
 			<-reqCtx.Done()
 
+			// 超时导致的错误
 			if reqCtx.Err() != nil {
-				// Error due to timeout / deadline
 				log.Printf("Upstream HTTP killed due to exec_timeout: %s\n", f.ExecTimeout)
 				w.Header().Set("X-Duration-Seconds", fmt.Sprintf("%f", time.Since(startedTime).Seconds()))
 				w.Header().Add("X-OpenFaaS-Internal", "of-watchdog")
@@ -174,6 +201,7 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 			return err
 		}
 
+		// 复制响应头与状态码
 		copyHeaders(w.Header(), &res.Header)
 		done := time.Since(startedTime)
 
@@ -188,8 +216,7 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 			}
 		}
 
-		// Exclude logging for health check probes from the kubelet which can spam
-		// log collection systems.
+		// 忽略kubelet健康检查日志，避免刷屏
 		if !strings.HasPrefix(r.UserAgent(), "kube-probe") {
 			if f.LogCallId {
 				callId := r.Header.Get("X-Call-Id")
@@ -207,6 +234,8 @@ func (f *HTTPFunctionRunner) Run(req FunctionRequest, contentLength int64, r *ht
 	return nil
 }
 
+// getTimeout 获取请求执行超时时间
+// 优先使用请求头X-Timeout，不超过默认最大超时
 func getTimeout(r *http.Request, defaultTimeout time.Duration) time.Duration {
 	execTimeout := defaultTimeout
 	if v := r.Header.Get("X-Timeout"); len(v) > 0 {
@@ -221,6 +250,8 @@ func getTimeout(r *http.Request, defaultTimeout time.Duration) time.Duration {
 	return execTimeout
 }
 
+// copyHeaders 深度复制HTTP请求头
+// 避免源header被意外修改
 func copyHeaders(destination http.Header, source *http.Header) {
 	for k, v := range *source {
 		vClone := make([]string, len(v))
@@ -229,6 +260,8 @@ func copyHeaders(destination http.Header, source *http.Header) {
 	}
 }
 
+// makeProxyClient 创建HTTP代理客户端
+// 配置长连接、超时、重定向策略
 func makeProxyClient(dialTimeout time.Duration) *http.Client {
 	proxyClient := http.Client{
 		Transport: &http.Transport{
@@ -243,6 +276,7 @@ func makeProxyClient(dialTimeout time.Duration) *http.Client {
 			IdleConnTimeout:       500 * time.Millisecond,
 			ExpectContinueTimeout: 1500 * time.Millisecond,
 		},
+		// 禁止自动重定向
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -251,8 +285,8 @@ func makeProxyClient(dialTimeout time.Duration) *http.Client {
 	return &proxyClient
 }
 
-// requiresStdlibProxy checks if the request should be proxied using the standard library reverse proxy.
-// Support SSE, NDSJON and WebSockets through the stdlib reverse proxy
+// requiresStdlibProxy 判断是否需要使用标准库反向代理
+// 支持SSE、流式JSON、WebSocket等特殊协议
 func requiresStdlibProxy(req *http.Request) bool {
 	acceptHeader := strings.ToLower(req.Header.Get("Accept"))
 
