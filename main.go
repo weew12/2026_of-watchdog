@@ -58,11 +58,12 @@ func main() {
 	}
 }
 
+// printVersion 打印 watchdog 版本信息
 func printVersion() {
 	sha := "unknown"
 	if len(GitCommit) > 0 {
 		sha = GitCommit
 	}
 
-	log.Printf("Version: %v\tSHA: %v\n", BuildVersion(), sha)
+	log.Printf("\033[32m[weew12] Version: %v\tSHA: %v\n\033[0m", BuildVersion(), sha)
 }
