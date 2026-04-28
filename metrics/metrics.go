@@ -71,6 +71,8 @@ func (m *MetricsServer) Serve(cancel chan bool) {
 // 包装原始处理器，自动统计请求计数、耗时、并发数
 func InstrumentHandler(next http.Handler, _http Http) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 对原始的http请求做包装 在包装内部操作指标处理 嵌套包装
+		//  eg: promhttp.InstrumentHandlerCounter(xxx, next2) 其中next也可以继续嵌套promhttp.InstrumentHandlerCounter(xxx, next1)
 		then := promhttp.InstrumentHandlerCounter(_http.RequestsTotal,
 			promhttp.InstrumentHandlerDuration(_http.RequestDurationHistogram, next))
 
