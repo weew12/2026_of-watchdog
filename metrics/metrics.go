@@ -69,16 +69,25 @@ func (m *MetricsServer) Serve(cancel chan bool) {
 
 // InstrumentHandler HTTP请求指标埋点包装器
 // 包装原始处理器，自动统计请求计数、耗时、并发数
-func InstrumentHandler(next http.Handler, _http Http) http.HandlerFunc {
+func InstrumentHandler(next http.Handler, _http *Http) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 对原始的http请求做包装 在包装内部操作指标处理 嵌套包装
 		//  eg: promhttp.InstrumentHandlerCounter(xxx, next2) 其中next也可以继续嵌套promhttp.InstrumentHandlerCounter(xxx, next1)
 		then := promhttp.InstrumentHandlerCounter(_http.RequestsTotal,
 			promhttp.InstrumentHandlerDuration(_http.RequestDurationHistogram, next))
 
+		// weew12 新增：判断当前请求是否为该 Pod 生命周期内的首个真实业务请求
+		firstRequest := _http.TryMarkFirstRequest()
+		firstRequestStart := time.Now()
+
 		_http.InFlight.Inc()
 		defer _http.InFlight.Dec()
 
 		then(w, r)
+
+		// weew12 新增：只在首个真实业务请求完成后记录一次处理时长
+		if firstRequest {
+			_http.ObserveFirstRequestDuration(time.Since(firstRequestStart))
+		}
 	}
 }

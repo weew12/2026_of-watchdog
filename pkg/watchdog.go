@@ -107,7 +107,7 @@ func (w *Watchdog) Start(ctx context.Context) error {
 	// 初始化 HTTP 指标收集器
 	httpMetrics := metrics.NewHttp()
 	// 注册主路由，并包装指标收集
-	http.HandleFunc("/", metrics.InstrumentHandler(requestHandler, httpMetrics))
+	http.HandleFunc("/", metrics.InstrumentHandler(requestHandler, &httpMetrics))
 	// 注册健康检查端点
 	http.HandleFunc("/_/health", makeHealthHandler(w.LockFilePresent))
 	// 注册就绪检查端点
@@ -264,12 +264,19 @@ func listenUntilShutdown(s *http.Server, shutdownCtx context.Context, healthchec
 		if writeErr != nil {
 			return fmt.Errorf("cannot write %s. To disable lock-file set env suppress_lock=true: %w", path, writeErr)
 		}
+
+		// weew12 新增：记录 watchdog ready 时间戳
+		// createLockFile 成功返回后，acceptingConnections 已经被置为 1
+		httpMetrics.RecordWatchdogReady()
 	} else {
 		// 警告：禁用锁文件意味着没有自动健康检查
 		log.Println("Warning: \"suppress_lock\" is enabled. No automated health-checks will be in place for your function.")
 
 		// 直接标记为接受连接
 		atomic.StoreInt32(&acceptingConnections, 1)
+
+		// weew12 新增：记录 watchdog ready 时间戳
+		httpMetrics.RecordWatchdogReady()
 	}
 
 	// 等待服务器完全关闭
